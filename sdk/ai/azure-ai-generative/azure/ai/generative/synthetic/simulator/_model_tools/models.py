@@ -48,8 +48,8 @@ class AsyncHTTPClientWithRetry:
 
         trace_config = TraceConfig()  # set up request logging
         trace_config.on_request_end.append(self.delete_auth_header)
-        # trace_config.on_request_start.append(self.on_request_start)
-        # trace_config.on_request_end.append(self.on_request_end) 
+        trace_config.on_request_start.append(self.on_request_start)
+        trace_config.on_request_end.append(self.on_request_end) 
         if retry_options is None:
             retry_options = RandomRetry(  # set up retry configuration
                 statuses=[104, 408, 409, 424, 429, 500, 502,

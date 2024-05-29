@@ -47,6 +47,10 @@ from azure.ai.generative.synthetic.simulator.simulator._callback_conversation_bo
     CallbackConversationBot,
 )
 
+from azure.ai.generative.synthetic.simulator.simulator._conversation_history_bot import (
+    ConversationHistoryBot,
+)
+
 from azure.ai.generative.synthetic.simulator._rai_rest_client.rai_client import (
     RAIClient,
 )
@@ -92,6 +96,7 @@ class Simulator:
             raise ValueError("Callback has to be an async function.")
 
         self.ai_client = ai_client
+        self.use_conversation_history = False
         self.simulator_connection = self._to_openai_chat_completion_model(
             simulator_connection
         )
@@ -148,6 +153,15 @@ class Simulator:
             model = self._get_user_proxy_completion_model(
                 tkey=adversarial_template_key, tparam=instantiation_parameters
             )
+
+            if self.use_conversation_history:
+                return ConversationHistoryBot(
+                    conversation_history=self.user_conversation_history,
+                    role=role,
+                    model=model,
+                    conversation_template=conversation_template,
+                    instantiation_parameters=instantiation_parameters
+                )
 
             return ConversationBot(
                 role=role,
@@ -223,6 +237,7 @@ class Simulator:
         api_call_delay_sec: float = 0,
         concurrent_async_task: int = 3,
         max_simulation_results: int = 3,
+        **kwargs
     ):
         """Asynchronously simulate conversations using the provided template and parameters
 
@@ -265,10 +280,7 @@ class Simulator:
             raise ValueError(
                 f"Expect parameters to be a list of dictionary, but found {type(parameters)}"
             )
-        if "conversation" not in template.template_name:
-            max_conversation_turns = 2
-        else:
-            max_conversation_turns = max_conversation_turns * 2
+
         if template.content_harm:
             self._ensure_service_dependencies()
             self.adversarial = True
@@ -276,11 +288,14 @@ class Simulator:
             templates = await self.template_handler._get_ch_template_collections(
                 template.template_name
             )
+
+            if "index" in kwargs.keys():
+                templates = [templates[kwargs["index"]]]
         else:
             template.template_parameters = parameters
             templates = [template]
 
-        semaphore = asyncio.Semaphore(concurrent_async_task)
+        # semaphore = asyncio.Semaphore(concurrent_async_task)
         sim_results = []
         tasks = []
         total_tasks = sum(len(t.template_parameters) for t in templates)
@@ -318,7 +333,7 @@ class Simulator:
                             max_conversation_turns=max_conversation_turns,
                             api_call_retry_limit=api_call_retry_limit,
                             api_call_delay_sec=api_call_delay_sec,
-                            sem=semaphore,
+                            # sem=semaphore,
                         )
                     )
                 )
@@ -349,7 +364,7 @@ class Simulator:
         api_call_retry_limit: int = 3,
         api_call_retry_sleep_sec: int = 1,
         api_call_delay_sec: float = 0,
-        sem: "asyncio.Semaphore" = asyncio.Semaphore(3),
+        # sem: "asyncio.Semaphore" = asyncio.Semaphore(3),
     ) -> List[Dict]:
         """
         Asynchronously simulate conversations using the provided template and parameters.
@@ -389,14 +404,13 @@ class Simulator:
             retry_timeout=api_call_retry_sleep_sec,
             logger=logger,
         )
-        async with sem:
-            async with asyncHttpClient.client as session:
-                _, conversation_history = await simulate_conversation(
-                    bots=bots,
-                    session=session,
-                    turn_limit=max_conversation_turns,
-                    api_call_delay_sec=api_call_delay_sec,
-                )
+        async with asyncHttpClient.client as session:
+            _, conversation_history = await simulate_conversation(
+                bots=bots,
+                session=session,
+                turn_limit=max_conversation_turns,
+                api_call_delay_sec=api_call_delay_sec,
+            )
 
         return self._to_chat_protocol(template, conversation_history, parameters)
 
@@ -570,6 +584,10 @@ class Simulator:
 
         return results[0]
 
+    def set_user_conversation_history(self, conversation_history):
+        self.use_conversation_history = True
+        self.user_conversation_history = conversation_history
+
     @staticmethod
     def from_fn(
         fn: Callable[[Any], dict],
@@ -605,11 +623,16 @@ class Simulator:
                     fn, simulator_connection, ai_client, **kwargs
                 )
 
-        return Simulator(
+        sim = Simulator(
             simulator_connection=simulator_connection,
             ai_client=ai_client,
             simulate_callback=fn,
         )
+
+        if "conversation_history" in kwargs.keys():
+            sim.set_user_conversation_history(kwargs["conversation_history"])
+
+        return sim
 
     @staticmethod
     def _from_openai_chat_completions(
